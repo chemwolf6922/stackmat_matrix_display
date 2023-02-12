@@ -5,6 +5,25 @@
 #include "pico/stdlib.h"
 #include "led_matrix.h"
 #include "font.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "tev.h"
+#include "tev_irq_injector.h"
+
+#define PERIODIC_TASK_INTERVAL 33
+
+static void tev_task(void* ctx);
+static void timer_test(void* ctx);
+
+static tev_handle_t tev = NULL;
+static tev_irq_injector_handle_t injector = NULL;
+static tev_timeout_handle_t periodic = NULL;
+
+static int x_offset_digit[6] = {0};
+static int x_offset_colon = 0;
+static int x_offset_period = 0;
+static int y_offset = 0;
+
 
 int main()
 {
@@ -30,45 +49,76 @@ int main()
 
     /** calculate display offsets */
     int total_width = 6*matrix_font_nums[0].witdh + matrix_font_colon.witdh + matrix_font_period.witdh;
-    int y_offset = (32-FONT_HEIGHT)/2;
-    int x_offset_digit[6] = {0};
+    y_offset = (32-FONT_HEIGHT)/2;
     x_offset_digit[0] = (128 - total_width)/2;
-    int x_offset_colon = x_offset_digit[0]+matrix_font_nums[0].witdh;
+    x_offset_colon = x_offset_digit[0]+matrix_font_nums[0].witdh;
     x_offset_digit[1] = x_offset_colon + matrix_font_colon.witdh;
     x_offset_digit[2] = x_offset_digit[1] + matrix_font_nums[0].witdh;
-    int x_offset_period = x_offset_digit[2] + matrix_font_nums[0].witdh;
+    x_offset_period = x_offset_digit[2] + matrix_font_nums[0].witdh;
     x_offset_digit[3] = x_offset_period + matrix_font_period.witdh;
     x_offset_digit[4] = x_offset_digit[3] + matrix_font_nums[0].witdh;
     x_offset_digit[5] = x_offset_digit[4] + matrix_font_nums[0].witdh;
 
-    int counter = 0;
-    for(;;)
-    {
-        led_matrix_frame_buffer_t* fb = led_matrix_get_free_fb();
-        if(fb)
-        {
-            led_matrix_frame_buffer_clear(fb);
-            const matrix_font_t* c = NULL;
-            int remain = counter;
-            for(int i=5;i>=0;i--)
-            {
-                int n = remain % 10;
-                remain = remain / 10;
-                c = &matrix_font_nums[n];
-                led_matrix_frame_buffer_draw(fb,x_offset_digit[i],y_offset,c->witdh,FONT_HEIGHT,c->data);
-            }
-            c = &matrix_font_colon;
-            led_matrix_frame_buffer_draw(fb,x_offset_colon,y_offset,c->witdh,FONT_HEIGHT,c->data);
-            c = &matrix_font_period;
-            led_matrix_frame_buffer_draw(fb,x_offset_period,y_offset,c->witdh,FONT_HEIGHT,c->data);
-            fb->color = 0xFFFFFF;
-            led_matrix_draw_free_fb();
-        }
-        counter = (counter + 1) % 1000000;
-        sleep_ms(30);
-    }
+    /** start FreeRTOS */
+    xTaskCreate(tev_task,"tev",2048,NULL,1,NULL);
+
+    /** FreeRTOS main loop */
+    vTaskStartScheduler();
 
     led_matrix_deinit();
 
+    for(;;)
+        tight_loop_contents();
+
     return 0;
 }
+
+static void tev_task(void* ctx)
+{
+    tev = tev_create_ctx();
+    injector = tev_irq_injector_new(tev,10);
+
+    /** start app */
+    timer_test(NULL);
+
+    /** tev main loop */
+    tev_main_loop(tev);
+
+    tev_irq_injector_free(injector);
+    injector = NULL;
+    tev_free_ctx(tev);
+    tev = NULL;
+}
+
+/** @todo for test */
+static void timer_test(void* ctx)
+{
+    /** task */
+    static int counter = 0;
+    led_matrix_frame_buffer_t* fb = led_matrix_get_free_fb();
+    if(fb)
+    {
+        led_matrix_frame_buffer_clear(fb);
+        const matrix_font_t* c = NULL;
+        int remain = counter;
+        for(int i=5;i>=0;i--)
+        {
+            int n = remain % 10;
+            remain = remain / 10;
+            c = &matrix_font_nums[n];
+            led_matrix_frame_buffer_draw(fb,x_offset_digit[i],y_offset,c->witdh,FONT_HEIGHT,c->data);
+        }
+        c = &matrix_font_colon;
+        led_matrix_frame_buffer_draw(fb,x_offset_colon,y_offset,c->witdh,FONT_HEIGHT,c->data);
+        c = &matrix_font_period;
+        led_matrix_frame_buffer_draw(fb,x_offset_period,y_offset,c->witdh,FONT_HEIGHT,c->data);
+        fb->color = 0xFFFFFF;
+        led_matrix_draw_free_fb();
+    }
+    counter = (counter + 1) % 1000000;
+
+    /** schedual next timer */
+    periodic = tev_set_timeout(tev,timer_test,NULL,PERIODIC_TASK_INTERVAL);
+}
+
+
