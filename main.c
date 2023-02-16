@@ -3,8 +3,10 @@
 #include <string.h>
 #include <stdint.h>
 #include "pico/stdlib.h"
+#include "hardware/uart.h"
 #include "led_matrix.h"
 #include "font.h"
+#include "stack_mat.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "tev.h"
@@ -13,7 +15,7 @@
 #define PERIODIC_TASK_INTERVAL 33
 
 static void tev_task(void* ctx);
-static void timer_test(void* ctx);
+static void on_stack_mat_data(const stack_mat_data_t* data, void* ctx);
 
 static tev_handle_t tev = NULL;
 static tev_irq_injector_handle_t injector = NULL;
@@ -28,7 +30,7 @@ static int y_offset = 0;
 int main()
 {
 
-    stdio_init_all();
+    // stdio_init_all();
 
     led_matrix_init(&(led_matrix_config_t){
         .height = 32,
@@ -78,47 +80,53 @@ static void tev_task(void* ctx)
     tev = tev_create_ctx();
     injector = tev_irq_injector_new(tev,10);
 
-    /** start app */
-    timer_test(NULL);
+    /** draw the default output */
+    on_stack_mat_data(&(stack_mat_data_t){.digits={0,0,0,0,0,0},.status=STACK_MAT_STATUS_IDLE},NULL);
+
+    /** init stacks mat connection */
+    stack_mat_init(17,uart0,injector,on_stack_mat_data,NULL);
 
     /** tev main loop */
     tev_main_loop(tev);
 
+    stack_mat_deinit();
     tev_irq_injector_free(injector);
     injector = NULL;
     tev_free_ctx(tev);
     tev = NULL;
 }
 
-/** @todo for test */
-static void timer_test(void* ctx)
+static void on_stack_mat_data(const stack_mat_data_t* data, void* ctx)
 {
-    /** task */
-    static int counter = 0;
+    /** check data */
+    for(int i=0;i<6;i++)
+    {
+        if(data->digits[i] < 0 || data->digits[i] > 9)
+            return;
+    }
+    /** udpate display */
     led_matrix_frame_buffer_t* fb = led_matrix_get_free_fb();
     if(fb)
     {
         led_matrix_frame_buffer_clear(fb);
         const matrix_font_t* c = NULL;
-        int remain = counter;
         for(int i=5;i>=0;i--)
         {
-            int n = remain % 10;
-            remain = remain / 10;
-            c = &matrix_font_nums[n];
+            c = &matrix_font_nums[data->digits[i]];
             led_matrix_frame_buffer_draw(fb,x_offset_digit[i],y_offset,c->witdh,FONT_HEIGHT,c->data);
         }
         c = &matrix_font_colon;
         led_matrix_frame_buffer_draw(fb,x_offset_colon,y_offset,c->witdh,FONT_HEIGHT,c->data);
         c = &matrix_font_period;
         led_matrix_frame_buffer_draw(fb,x_offset_period,y_offset,c->witdh,FONT_HEIGHT,c->data);
-        fb->color = 0xFFFFFF;
+        if(data->status == STACK_MAT_STATUS_BOTH)
+            fb->color = 0xFF0000;
+        else if(data->status == STACK_MAT_STATUS_READY)
+            fb->color = 0x00FF00;
+        else
+            fb->color = 0xFFFFFF;
         led_matrix_draw_free_fb();
     }
-    counter = (counter + 1) % 1000000;
-
-    /** schedual next timer */
-    periodic = tev_set_timeout(tev,timer_test,NULL,PERIODIC_TASK_INTERVAL);
 }
 
 

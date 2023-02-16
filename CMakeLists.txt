@@ -24,6 +24,7 @@ add_executable(matrix_display
         main.c
         led_matrix.c
         led_matrix_frame_buffer.c
+        stack_mat.c
         tev/tev.c
         tev/list.c
         tev/heap/heap.c
@@ -36,6 +37,10 @@ target_include_directories(matrix_display PRIVATE
         tev 
         tev_irq_injector 
         tev/map)
+
+# enable usb output, disable uart output
+# pico_enable_stdio_usb(matrix_display 1)
+# pico_enable_stdio_uart(matrix_display 0)
 
 # pull in common dependencies
 target_link_libraries(matrix_display PUBLIC
